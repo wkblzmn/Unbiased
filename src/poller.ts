@@ -5,8 +5,7 @@ import { SOURCES } from "./sources";
 import { fetchArticleBody } from "./articleFetcher";
 
 const parser = new Parser();
-console.log("DEBUG: SUPABASE_URL raw value =", JSON.stringify(process.env.SUPABASE_URL));
-console.log("DEBUG: SUPABASE_URL length =", process.env.SUPABASE_URL?.length ?? 0);
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
