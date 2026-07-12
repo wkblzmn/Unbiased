@@ -1,0 +1,28 @@
+{
+  "name": "unbiased-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "^2.11.0",
+    "@mozilla/readability": "^0.6.0",
+    "@supabase/supabase-js": "^2.110.0",
+    "dotenv": "^17.4.2",
+    "jsdom": "^29.1.1",
+    "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^26.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}
