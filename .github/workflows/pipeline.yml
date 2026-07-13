@@ -1,26 +1,47 @@
-name: Unbiased Pipeline
+name: Unbiased pipeline
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # Every 30 minutes. GitHub Actions cron is best-effort: runs may be
+    # delayed under load, and scheduled workflows are auto-disabled after
+    # 60 days of repository inactivity. Both are documented limitations.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
+# BUG-13 FIX. GitHub does NOT serialize scheduled runs. A delayed run
+# overlapping the next scheduled one meant two processes reading the same
+# `status='ready'` articles and both clustering them. cluster_articles' PK
+# stops duplicate LINKS, but nothing stopped two duplicate story_clusters
+# rows for the same event — each holding half the coverage, neither ever
+# reaching two outlets, both therefore invisible in the feed. Silent,
+# and it looks exactly like recall-biased fragmentation in the stats.
+#
+# The pipeline has no locking of its own (a one-shot process reading and
+# writing a status column is not a transaction). This is the lock.
 concurrency:
   group: unbiased-pipeline
   cancel-in-progress: false
 
 jobs:
-  run-pipeline:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 25 # must stay under the 30-min cron interval
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: "20"
+          cache: "npm"
+
       - run: npm ci
-      - run: npm run build
-      - run: npm start
+
+      - run: npx tsc --noEmit
+
+      - name: Run pipeline
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npx tsx src/index.ts
