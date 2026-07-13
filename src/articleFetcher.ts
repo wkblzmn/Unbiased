@@ -31,3 +31,13 @@ export async function fetchArticleBody(url: string): Promise<string | null> {
     return null;
   }
 }
+
+const MIN_FALLBACK_WORDS = 20;
+
+export function extractFallbackBody(contentSnippet: string | undefined): string | null {
+  if (!contentSnippet) return null;
+  // Strip the trailing "Details" link text every Dhaka Tribune entry carries.
+  const cleaned = contentSnippet.replace(/\s*Details\s*$/i, "").trim();
+  const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+  return wordCount >= MIN_FALLBACK_WORDS ? cleaned : null;
+}

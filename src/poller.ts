@@ -2,11 +2,9 @@ import Parser from "rss-parser";
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import { SOURCES } from "./sources";
-import { fetchArticleBody } from "./articleFetcher";
+import { fetchArticleBody, extractFallbackBody } from "./articleFetcher";
 
 const parser = new Parser();
-
-
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -48,6 +46,7 @@ async function pollAll() {
               title,
               url: item.link,
               published_at: item.pubDate ? new Date(item.pubDate).toISOString() : null,
+              rss_snippet: item.contentSnippet ?? null,
             },
             { onConflict: "url", ignoreDuplicates: true }
           );
@@ -63,20 +62,31 @@ async function pollAll() {
 async function backfillArticleBodies() {
   const { data: pending, error } = await supabase
     .from("articles")
-    .select("id, url")
+    .select("id, url, rss_snippet")
     .is("body_text", null);
   if (error) throw error;
 
   console.log(`\n--- Backfilling ${pending.length} article bodies ---`);
   for (const row of pending) {
-    const body = await fetchArticleBody(row.url);
+    let body = await fetchArticleBody(row.url);
+    let viaFallback = false;
+
+    if (!body) {
+      const fallback = extractFallbackBody(row.rss_snippet ?? undefined);
+      if (fallback) {
+        body = fallback;
+        viaFallback = true;
+      }
+    }
+
     if (!body) continue;
+
     const { error: updateError } = await supabase
       .from("articles")
       .update({ body_text: body })
       .eq("id", row.id);
     if (updateError) console.error("Update failed:", updateError.message);
-    else console.log(`Filled body for: ${row.url}`);
+    else console.log(`${viaFallback ? "Filled body via RSS fallback for" : "Filled body for"}: ${row.url}`);
   }
 }
 
@@ -85,7 +95,6 @@ export async function runPoller() {
   await backfillArticleBodies();
 }
 
-// Still runnable standalone for manual testing: npx ts-node src/poller.ts
 if (require.main === module) {
   runPoller();
 }
