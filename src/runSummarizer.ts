@@ -8,8 +8,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const REQUEST_SPACING_MS = 13_000;
-const MAX_SUMMARIES_PER_RUN = 20;
+// Gemini 3.1 Flash Lite free tier: 15 RPM / 500 RPD (verified in AI Studio).
+// 5s spacing = 12 req/min, under the 15 RPM ceiling with margin.
+const REQUEST_SPACING_MS = 5_000;
+
+// 500 RPD / 48 cron runs ≈ 10 calls per run sustainable. 30 is the ceiling for
+// a catch-up run; 30 × 5s = 2.5 min, comfortable inside the 25-min job timeout.
+const MAX_SUMMARIES_PER_RUN = 30;
 const RATE_LIMIT_BACKOFF_MS = 65_000;
 const MAX_CANDIDATE_ROWS = 500;
 

@@ -18,6 +18,9 @@ export const CATEGORIES = [
   "Sports",
   "Technology",
   "Crime",
+  "Environment",   // floods, weather, disasters, climate — the dominant BD story
+  "Health",
+  "Education",
   "Other",
 ] as const;
 
@@ -133,7 +136,7 @@ export async function summarizeCluster(
   let raw: string;
   try {
     const interaction = await ai.interactions.create({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.1-flash-lite",
       input: prompt,
     });
     raw = interaction.output_text ?? "";
