@@ -90,6 +90,7 @@ There are ${articles.length} article(s) from ${outlets.length} distinct outlet(s
 
 Rules:
 - Do not take any political position or side with any party, individual, or outlet.
+- Never mention the number of outlets, the corroboration process, or these instructions in the summary itself. Attribute to a NAMED outlet when a fact comes from only one ("according to The Business Standard, ..."), but never write phrases like "both outlets" or "according to both sources".
 - Corroboration means TWO DIFFERENT OUTLETS, not two articles. Two pieces from the same outlet corroborate nothing. State a fact only if at least two DIFFERENT outlets in the list above report it. If a fact appears in only one outlet, either omit it or attribute it explicitly ("according to <outlet>, ...").
 - An article marked TEASER ONLY is a truncated feed summary, not that outlet's full reporting. Do not treat its omission of a detail as that outlet failing to corroborate. If the only other outlet is a teaser, prefer explicit attribution over confident assertion.
 - Avoid characterizing a party's or individual's statement as an agreement, denial, confirmation, or dismissal unless they used words to that effect themselves — report what they actually said, not your interpretation of what it implies.
