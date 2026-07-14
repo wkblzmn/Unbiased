@@ -1,0 +1,28 @@
+name: Check candidate sources
+
+# Manual only. This is a diagnostic, not part of the pipeline.
+#
+# It MUST run here rather than on your laptop. Dhaka Tribune's bot wall blocks
+# datacenter IPs — it fetches fine from Bangladesh and 403s from Azure. A local
+# run of this script would tell you every candidate is FULL and you would find
+# out otherwise in production, the way you did with DT.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Probe candidate feeds
+        run: npx tsx scripts/checkFeeds.ts
