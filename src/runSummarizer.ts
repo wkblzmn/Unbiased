@@ -8,24 +8,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Gemini free tier is 5 req/min (not 15, as the original plan assumed).
-// The old loop fired requests back-to-back with zero delay, so any run
-// with 6+ clusters started 429-ing at request six — and the bare catch
-// logged it identically to a broken prompt. 13s spacing keeps us under
-// the real ceiling with margin.
 const REQUEST_SPACING_MS = 13_000;
-
-// Bound the job. 20 * 13s ≈ 4.5 min, comfortably inside a 30-min cron.
-// Anything over the cap is simply picked up on the next run.
 const MAX_SUMMARIES_PER_RUN = 20;
-
-// If we get rate limited anyway, back off once and then give up on the
-// run rather than grinding through 429s.
 const RATE_LIMIT_BACKOFF_MS = 65_000;
-
 const MAX_CANDIDATE_ROWS = 500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function hasRealBody(bodyText: string | null, bodySource: string | null): boolean {
+  if (!bodyText || bodyText.trim().length === 0) return false;
+  return (bodySource ?? "page") !== "none";
+}
 
 export async function runSummarizer(): Promise<SummarizerStats> {
   const stats: SummarizerStats = {
@@ -39,27 +32,26 @@ export async function runSummarizer(): Promise<SummarizerStats> {
     skippedInsufficientBodies: 0,
   };
 
-  // BUG-1 FIX (kept): the old query was `.is("summary", null)`. A cluster
-  // gets summarized the moment it qualifies, and the clusterer keeps ADDING
-  // to it for up to 72h. Under the old query none of those later articles
-  // ever reached the summary — the app showed "4 sources" above a paragraph
-  // synthesized from 2 of them.
+  // THE GATE: summary_source_count, not source_count and not article_count.
   //
-  // BUG-11 FIX (new): the gate was `.gte("article_count", 2)`. article_count
-  // counts ARTICLES. A cluster of two Daily Star pieces satisfied it and got
-  // a summary whose prompt claimed two-source corroboration. The gate is now
-  // source_count — DISTINCT OUTLETS. A cluster that never attracts a second
-  // outlet is never summarized and never surfaced, which is also a
-  // meaningful saving of the 5 req/min free tier.
+  //   article_count        - counts ARTICLES. Two Daily Star pieces satisfied
+  //                          it. Wrong; fixed in 002.
+  //   source_count         - counts OUTLETS, including link-only ones whose
+  //                          text we never read. Also wrong here: a link-only
+  //                          outlet corroborates nothing, because there is
+  //                          nothing to corroborate WITH.
+  //   summary_source_count - counts outlets whose TEXT is in the prompt.
+  //                          This is the only number that makes the
+  //                          two-source corroboration rule mean anything.
   //
-  // PostgREST cannot compare two columns in a filter, so the growth check
-  // happens in JS. The columns are tiny (no bodies), so this is cheap.
+  // Link-only articles still appear in the source list (feed_cluster_sources)
+  // with their headline, link and bias label. They just never reach the model.
   const { data: rows, error } = await supabase
     .from("story_clusters")
     .select(
-      "id, headline, summary, article_count, source_count, summarized_at_count"
+      "id, headline, summary, article_count, source_count, summary_source_count, summarized_at_count"
     )
-    .gte("source_count", 2)
+    .gte("summary_source_count", 2)
     .order("last_article_at", { ascending: false })
     .limit(MAX_CANDIDATE_ROWS);
   if (error) throw error;
@@ -100,21 +92,29 @@ export async function runSummarizer(): Promise<SummarizerStats> {
       continue;
     }
 
-    const sourceIds = [...new Set((articles as any[]).map((a) => a.source_id))];
+    // ONLY articles with real text go into the prompt. A link-only article is
+    // in the cluster and on the detail screen, but the model never sees it —
+    // we did not read a word of it, and asking a model to corroborate against
+    // a headline it has no article for is asking it to make something up.
+    const withText = (articles as any[]).filter((a) =>
+      hasRealBody(a.body_text, a.body_source)
+    );
 
-    // Defence in depth. source_count is a denormalized column and a
-    // denormalized column is a claim, not a fact. Re-derive the invariant
-    // from the rows we are ACTUALLY about to put in the prompt — because the
-    // prompt is about to assert two-outlet corroboration to the model, and
-    // that assertion must be true at the moment it is made.
-    if (sourceIds.length < 2) {
+    const summarySourceIds = [...new Set(withText.map((a) => a.source_id))];
+
+    // Defence in depth. summary_source_count is a denormalized column, and a
+    // denormalized column is a claim, not a fact. Re-derive it from the rows
+    // we are ACTUALLY about to put in the prompt — because the prompt is about
+    // to assert two-outlet corroboration to the model, and that assertion must
+    // be true at the moment it is made.
+    if (summarySourceIds.length < 2) {
       console.error(
-        `Cluster ${cluster.id} claims source_count=${cluster.source_count} but ` +
-          `its articles span ${sourceIds.length} outlet(s). Skipping and repairing.`
+        `Cluster ${cluster.id} claims summary_source_count=${cluster.summary_source_count} ` +
+          `but only ${summarySourceIds.length} outlet(s) have usable text. Repairing and skipping.`
       );
       await supabase
         .from("story_clusters")
-        .update({ source_count: sourceIds.length })
+        .update({ summary_source_count: summarySourceIds.length })
         .eq("id", cluster.id);
       stats.skippedInsufficientBodies++;
       continue;
@@ -123,58 +123,51 @@ export async function runSummarizer(): Promise<SummarizerStats> {
     const { data: sources, error: sourceError } = await supabase
       .from("sources")
       .select("id, name")
-      .in("id", sourceIds);
+      .in("id", summarySourceIds);
     if (sourceError) {
       console.error(`Failed to load sources for ${cluster.id}:`, sourceError.message);
       continue;
     }
-    const sourceNameById = new Map(
-      (sources as any[]).map((s) => [s.id, s.name])
-    );
+    const sourceNameById = new Map((sources as any[]).map((s) => [s.id, s.name]));
 
-    const sourceArticles: SourceArticle[] = (articles as any[]).map((a) => ({
+    const sourceArticles: SourceArticle[] = withText.map((a) => ({
       sourceName: sourceNameById.get(a.source_id) ?? "Unknown source",
       title: a.title,
       bodyText: a.body_text ?? "",
-      // NULL body_source = a row that predates the migration. Treat as a
-      // real page fetch: those rows all came from the two outlets whose
-      // pages we can actually fetch, and they age out of the window in days.
       isTeaser: a.body_source === "rss_snippet",
     }));
 
-    const realBodies = sourceArticles.filter((a) => !a.isTeaser).length;
-    if (realBodies === 0) {
-      // Every body in this cluster is a ~48-word teaser. There is nothing to
-      // summarize that is not already the teaser. Do not spend a Gemini call
-      // producing a confident paragraph out of two feed blurbs.
-      console.error(
-        `Cluster ${cluster.id}: all ${sourceArticles.length} bodies are teasers. Skipping.`
-      );
-      stats.skippedInsufficientBodies++;
-      continue;
-    }
-
-    // Spacing, not rate limiting after the fact.
     if (!first) await sleep(REQUEST_SPACING_MS);
     first = false;
 
-    const teaserCount = sourceArticles.length - realBodies;
+    const linkOnlyCount = (articles as any[]).length - withText.length;
+    const teaserCount = sourceArticles.filter((a) => a.isTeaser).length;
     console.log(
       `--- ${isRefresh ? "RE-summarizing" : "Summarizing"}: "${cluster.headline}" ` +
-        `(${sourceArticles.length} articles / ${sourceIds.length} outlets` +
-        `${teaserCount > 0 ? `, ${teaserCount} teaser-only` : ""}) ---`
+        `(${withText.length} with text / ${summarySourceIds.length} outlets` +
+        `${teaserCount > 0 ? `, ${teaserCount} teaser` : ""}` +
+        `${linkOnlyCount > 0 ? `; ${linkOnlyCount} link-only excluded` : ""}) ---`
     );
 
     let result = await summarizeCluster(sourceArticles);
 
     if (!result.ok && result.kind === "rate_limit") {
       stats.rateLimited++;
-      console.error(`  429 — backing off ${RATE_LIMIT_BACKOFF_MS / 1000}s and retrying once.`);
+      // PRINT THE QUOTA NAME. The old code logged "429 — backing off" and
+      // threw away result.detail, which is where Google names the exact quota
+      // that was violated. A PER-MINUTE quota can be cleared by waiting. A
+      // PER-DAY quota cannot, and the 65s backoff is then pure waste. Without
+      // this line you cannot tell which one you are hitting.
+      console.error(`  429 — quota detail: ${result.detail}`);
+      console.error(`  backing off ${RATE_LIMIT_BACKOFF_MS / 1000}s and retrying once.`);
       await sleep(RATE_LIMIT_BACKOFF_MS);
       result = await summarizeCluster(sourceArticles);
 
       if (!result.ok && result.kind === "rate_limit") {
-        console.error("  Still rate limited. Abandoning this run; next cron picks it up.");
+        console.error(
+          "  Still rate limited after backoff. If the quota above says PerDay, " +
+            "no amount of waiting inside this run will help."
+        );
         break;
       }
     }
@@ -197,8 +190,6 @@ export async function runSummarizer(): Promise<SummarizerStats> {
         headline,
         summary,
         category,
-        // The watermark. Without it, the next run would re-summarize this
-        // cluster forever and burn the whole Gemini quota on no-op calls.
         summarized_at_count: cluster.article_count,
       })
       .eq("id", cluster.id);

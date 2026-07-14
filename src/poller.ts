@@ -15,31 +15,25 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Raised from 10. GitHub Actions cron is best-effort — a delayed or
-// dropped run means more than 10 items may have accumulated since the
-// last poll. Dedup is enforced by the `url unique` constraint, so a
-// bigger slice costs nothing but a few no-op upserts.
+// Raised from 10. GitHub Actions cron is best-effort — a delayed or dropped
+// run means more than 10 items may have accumulated since the last poll.
+// Dedup is enforced by the `url unique` constraint, so a bigger slice costs
+// nothing but a few no-op upserts.
+//
+// NOTE: The Daily Star's feed only ever returns 10 items regardless of this
+// number. It is our best body source and it is the narrowest intake. Worth
+// revisiting.
 const ITEMS_PER_FEED = 25;
 
-// BUG-6: articles that permanently fail (404, DT 403 with a too-short
-// snippet) used to be retried on EVERY run, forever, building an
-// unbounded queue of dead URLs.
 const MAX_BODY_ATTEMPTS = 3;
-
-// PostgREST caps a response at 1000 rows by default. Being explicit means
-// hitting the cap is visible rather than silent.
 const MAX_PENDING_PER_RUN = 200;
 
-// Daily Star wraps its headline in a nested <a> element inside <title>;
-// the other two put plain text directly in the tag. rss-parser (xml2js)
-// returns a string for plain text but a parsed object subtree when it
-// hits nested elements — this normalizes both.
-//
-// BUG-9 FIX: the old version's last line was `return String(raw)`, which
-// on any unhandled shape produces the literal string "[object Object]".
-// That normalizes to the keyword set {object} and would cheerfully cluster
-// with every other broken title in the batch. Silently. It now returns
-// null and the caller counts and skips it.
+// Daily Star wraps its headline in a nested <a> element inside <title>; the
+// other two put plain text directly in the tag. rss-parser (xml2js) returns a
+// string for plain text but a parsed object subtree when it hits nested
+// elements — this normalizes both. Returns null on any unhandled shape rather
+// than the literal "[object Object]", which used to normalize to the keyword
+// set {object} and cluster with every other broken title in the batch.
 export function extractTitle(raw: unknown): string | null {
   if (typeof raw === "string") {
     const t = raw.trim();
@@ -51,10 +45,6 @@ export function extractTitle(raw: unknown): string | null {
   return null;
 }
 
-// ROT fix: the poller used to look up source ids by exact name match and
-// `continue` with a console.error on a miss — one typo in sources.ts and
-// an entire outlet vanished from the product while the run still exited 0.
-// sources.ts is now the single source of truth; the table follows it.
 async function syncSources(): Promise<Map<string, string>> {
   const { error: upsertError } = await supabase.from("sources").upsert(
     SOURCES.map((s) => ({
@@ -75,7 +65,6 @@ async function syncSources(): Promise<Map<string, string>> {
 
   for (const s of SOURCES) {
     if (!idByName.has(s.name)) {
-      // Now a hard failure, not a shrug.
       throw new Error(`Source "${s.name}" missing from DB after upsert.`);
     }
   }
@@ -106,9 +95,6 @@ async function pollAll(stats: PollerStats, idByName: Map<string, string>) {
           continue;
         }
 
-        // Articles with no pubDate used to be inserted with published_at
-        // = null and then silently filtered out by the clusterer forever.
-        // Fall back to poll time and COUNT it instead of losing it.
         let publishedAt: string;
         if (item.pubDate) {
           publishedAt = new Date(item.pubDate).toISOString();
@@ -117,15 +103,10 @@ async function pollAll(stats: PollerStats, idByName: Map<string, string>) {
           counters.missingPubDate++;
         }
 
-        // BUG-7 FIX. Dedup is still the DB's job (`url unique` +
-        // ignoreDuplicates), but WITHOUT `.select()` PostgREST returns
-        // data: null / error: null for both a fresh insert and a skipped
-        // duplicate — so the old `else counters.inserted++` counted every
-        // item on every run and NEW was always equal to SEEN.
-        //
         // `resolution=ignore-duplicates` + `return=representation` returns
-        // ONLY the rows that actually landed. An empty array means "we
-        // already had it".
+        // ONLY the rows that actually landed. An empty array means "already
+        // had it". Without the .select(), PostgREST returns data:null for
+        // both cases and the NEW counter was always equal to SEEN.
         const { data: insertedRows, error: insertError } = await supabase
           .from("articles")
           .upsert(
@@ -157,8 +138,6 @@ async function pollAll(stats: PollerStats, idByName: Map<string, string>) {
   }
 }
 
-// Supabase returns an embedded relation as either an object or a
-// single-element array depending on how it infers the relationship.
 function embeddedSourceName(row: any): string {
   const s = row?.sources;
   if (Array.isArray(s)) return s[0]?.name ?? "Unknown";
@@ -168,7 +147,7 @@ function embeddedSourceName(row: any): string {
 async function backfillArticleBodies(stats: PollerStats) {
   const { data: pending, error } = await supabase
     .from("articles")
-    .select("id, url, rss_snippet, body_fetch_attempts, sources(name)")
+    .select("id, url, title, rss_snippet, body_fetch_attempts, sources(name)")
     .eq("status", "pending")
     .lt("body_fetch_attempts", MAX_BODY_ATTEMPTS)
     .order("published_at", { ascending: false })
@@ -178,8 +157,7 @@ async function backfillArticleBodies(stats: PollerStats) {
   if (pending.length === MAX_PENDING_PER_RUN) {
     console.warn(
       `*** Pending backlog hit the ${MAX_PENDING_PER_RUN} cap. Older pending ` +
-        `articles are deferred to the next run. If this persists, the fetcher ` +
-        `is not keeping up with the feeds. ***`
+        `articles are deferred. If this persists, the fetcher is not keeping up. ***`
     );
   }
 
@@ -187,8 +165,7 @@ async function backfillArticleBodies(stats: PollerStats) {
 
   for (const row of pending as any[]) {
     const sourceName = embeddedSourceName(row);
-    const counters =
-      stats.perSource.get(sourceName) ?? emptySourceCounters();
+    const counters = stats.perSource.get(sourceName) ?? emptySourceCounters();
     stats.perSource.set(sourceName, counters);
 
     const attemptsSoFar: number = row.body_fetch_attempts ?? 0;
@@ -212,8 +189,6 @@ async function backfillArticleBodies(stats: PollerStats) {
     }
 
     const attempts = attemptsSoFar + 1;
-    // A permanent failure is worth exactly one attempt. A transient one
-    // gets MAX_BODY_ATTEMPTS before we give up on it.
     const exhausted = outcome.permanent || attempts >= MAX_BODY_ATTEMPTS;
 
     if (!exhausted) {
@@ -235,7 +210,6 @@ async function backfillArticleBodies(stats: PollerStats) {
         .from("articles")
         .update({
           body_text: fallback,
-          // The summarizer MUST know this is a teaser, not an article.
           body_source: "rss_snippet",
           status: "ready",
           body_fetch_attempts: attempts,
@@ -249,16 +223,53 @@ async function backfillArticleBodies(stats: PollerStats) {
       continue;
     }
 
-    // Dead end. This article will never appear in the product. It is now
-    // counted rather than silently dropped, and it is the number that
-    // proves how much of Dhaka Tribune's coverage the 403 costs us.
+    // ------------------------------------------------------------------
+    // LINK-ONLY. This used to be `status = 'failed'` — and 'failed' meant
+    // DELETED. No link, no headline, no bias label, no place in the source
+    // list. 62% of Dhaka Tribune's coverage was disappearing here, including
+    // political stories where DT's framing is the entire reason DT is in the
+    // product.
+    //
+    // But we HAVE the headline. We HAVE the URL. We HAVE the outlet and its
+    // lean. The headline IS the framing — it is the thing the app exists to
+    // show the reader. Only the body is missing, and the body is needed for
+    // exactly one of the product's three claims (the summary), not for the
+    // other two (who covered it, how they framed it).
+    //
+    // So: keep it. It clusters (on title, at a raised bar). It appears in the
+    // source list with its own headline. It counts toward source_count.
+    // It does NOT count toward summary_source_count and it is NEVER sent to
+    // the model, because we did not read a word of it and it corroborates
+    // nothing.
+    //
+    // 'failed' now means genuinely unusable — and should be ~0.
+    // ------------------------------------------------------------------
+    const usableAsLink = !!row.title && String(row.title).trim().length > 0 && !!row.url;
+
+    if (usableAsLink) {
+      const { error: updateError } = await supabase
+        .from("articles")
+        .update({
+          status: "linkonly",
+          body_source: "none",
+          body_fetch_attempts: attempts,
+        })
+        .eq("id", row.id);
+      if (updateError) console.error("Update failed:", updateError.message);
+      else {
+        counters.linkOnly++;
+        console.log(`LINK-ONLY (${outcome.reason}, no body): ${row.url}`);
+      }
+      continue;
+    }
+
     await supabase
       .from("articles")
       .update({ status: "failed", body_fetch_attempts: attempts })
       .eq("id", row.id);
     counters.bodyFailedPermanently++;
     console.error(
-      `PERMANENTLY DROPPED (${outcome.reason}, no usable snippet): ${row.url}`
+      `PERMANENTLY DROPPED (${outcome.reason}, no title or url): ${row.url}`
     );
   }
 }
