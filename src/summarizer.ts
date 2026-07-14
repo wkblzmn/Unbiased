@@ -94,7 +94,17 @@ Rules:
 - An article marked TEASER ONLY is a truncated feed summary, not that outlet's full reporting. Do not treat its omission of a detail as that outlet failing to corroborate. If the only other outlet is a teaser, prefer explicit attribution over confident assertion.
 - Avoid characterizing a party's or individual's statement as an agreement, denial, confirmation, or dismissal unless they used words to that effect themselves — report what they actually said, not your interpretation of what it implies.
 - Pay attention to how each outlet's HEADLINE frames the event, not just the body text — outlets sometimes frame the same event differently at the headline level even when the underlying facts agree. Prefer the more neutral framing. Never adopt one outlet's headline as your own.
-- Assign exactly one category, chosen from this list and spelled exactly as written: ${CATEGORIES.join(", ")}. Use "Other" only if none of the others fit.
+- Assign exactly one category, spelled exactly as written. Use these definitions:
+    Politics      — parliament, bills, parties, elections, ministers acting in a political capacity, government policy
+    Economics     — the economy, business, banks, markets, trade, prices, budgets, infrastructure projects
+    International — events outside Bangladesh, or Bangladesh's relations with other countries
+    Sports        — any sport, any country
+    Technology    — technology, telecoms, internet, digital services
+    Crime         — crimes, arrests, courts, police investigations
+    Environment   — floods, landslides, cyclones, rain, waterlogging, rivers, weather, climate, pollution, and the relief and casualty reporting that follows a natural disaster
+    Health        — hospitals, disease, health workers, public health, medical services
+    Education     — schools, exams, universities, students, curricula
+    Other         — ONLY if the event genuinely fits none of the above. Do not use "Other" as a default. If a category above plausibly fits, use it.
 - Respond in English.
 - Respond ONLY with valid JSON, no markdown code fences, no explanation, in exactly this shape:
 {"headline": "...", "summary": "...", "category": "..."}
