@@ -1,30 +1,21 @@
 // Run counters.
 //
-// The pipeline used to have four silent-drop paths (no body, no pubDate,
-// source name mismatch, article too old) and zero visibility into any of
-// them. That is not acceptable for a product whose entire claim is "we show
-// you all the sources" — you cannot claim balanced coverage while not
-// measuring which source you are dropping.
-//
-// The per-source table below is the evidence for the Dhaka Tribune 403
-// limitation, and it is a table you can paste straight into the report.
+// The pipeline used to have four silent-drop paths and zero visibility into any
+// of them. That is not acceptable for a product whose entire claim is "we show
+// you all the sources" — you cannot claim balanced coverage while not measuring
+// which source you are dropping.
 
 export interface SourceCounters {
   feedError: boolean;
   itemsSeen: number;
-  inserted: number;      // genuinely new rows
-  alreadySeen: number;   // dedup hits
+  inserted: number;
+  alreadySeen: number;
   malformedTitle: number;
   missingPubDate: number;
   bodyFromPage: number;
   bodyFromRssFallback: number;
   bodyRetryPending: number;
-  // Body unavailable, but title + url + outlet are real. Clusters, appears
-  // in the source list, never feeds a summary. This is the number that used
-  // to be bodyFailedPermanently — i.e. deleted.
   linkOnly: number;
-  // Genuinely unusable (no title or no url). Should be ~0. If this is not
-  // ~0, something is wrong with the feed, not with the fetcher.
   bodyFailedPermanently: number;
 }
 
@@ -48,17 +39,42 @@ export interface PollerStats {
   perSource: Map<string, SourceCounters>;
 }
 
+export interface VetoRecord {
+  articleTitle: string;
+  wouldHaveMergedVia: string;
+  sharedTerms: string[];
+}
+
 export interface ClustererStats {
-  readyArticles: number;      // with a real body
-  linkOnlyArticles: number;   // title + url only
+  readyArticles: number;
+  linkOnlyArticles: number;
   staleArticles: number;
   seedClusters: number;
   joinedExisting: number;
   createdNew: number;
   mergeVia: Record<string, number>;
-  belowSourceBar: number;   // < 2 outlets covered it at all
-  belowSummaryBar: number;  // < 2 outlets supplied usable text
+  belowSourceBar: number;
+  belowSummaryBar: number;
   readQueryTruncated: boolean;
+
+  // THE VETO, INSTRUMENTED.
+  //
+  // GENERIC_DF_RATIO is a guess verified by hand against 8 merges from one run.
+  // That is a real check on a tiny sample, and the small-corpus problem that
+  // killed the IDF experiment (v3) has not gone away. So the veto reports
+  // everything it does and is judged on the evidence, not believed on the
+  // argument.
+  //
+  // WHAT TO WATCH:
+  //   genericTerms - if an EVENT-IDENTIFYING word shows up in here (a place, a
+  //                  person, a specific noun), the ratio is too low and the veto
+  //                  will start rejecting good merges. Raise GENERIC_DF_RATIO.
+  //   vetoLog      - every merge blocked, with the terms that were shared. Read
+  //                  these. If they look like the same event, the veto is wrong.
+  vetoed: number;
+  genericTerms: string[];
+  corpusTitles: number;
+  vetoLog: VetoRecord[];
 }
 
 export interface SummarizerStats {
@@ -125,16 +141,49 @@ export function printRunReport(
   console.log(`  < 2 outlets covered      : ${cluster.belowSourceBar}`);
   console.log(`  < 2 outlets with text    : ${cluster.belowSummaryBar}`);
   console.log(`  merge_via                : ${JSON.stringify(cluster.mergeVia)}`);
-  if (cluster.mergeVia["title_nobody"]) {
+
+  console.log("\nGeneric-term veto:");
+  console.log(`  corpus titles            : ${cluster.corpusTitles}`);
+  console.log(`  merges blocked           : ${cluster.vetoed}`);
+  console.log(
+    `  generic terms (${cluster.genericTerms.length}) : ${
+      cluster.genericTerms.length > 0 ? cluster.genericTerms.join(", ") : "(none)"
+    }`
+  );
+  console.log(
+    "  ^ READ THIS LIST. These words can no longer justify a merge on their own."
+  );
+  console.log(
+    "    If an event-identifying word (a place, a person, a specific noun) is in"
+  );
+  console.log(
+    "    it, GENERIC_DF_RATIO is too low and good merges are being rejected."
+  );
+
+  if (cluster.vetoLog.length > 0) {
+    console.log("\n  Blocked merges:");
+    for (const v of cluster.vetoLog) {
+      console.log(`    - "${v.articleTitle}"`);
+      console.log(
+        `      would have merged via ${v.wouldHaveMergedVia} on: ${v.sharedTerms.join(", ")}`
+      );
+      console.log(
+        `      (every one of those is generic -> no event-identifying evidence)`
+      );
+    }
     console.log(
-      `  ^ ${cluster.mergeVia["title_nobody"]} link-only merge(s) this run. These are the ` +
-        `riskiest links in the system (no body to confirm with). Audit them: ` +
-        `see the query at the bottom of migration_003.sql.`
+      "\n  Each of these founded its own cluster instead. That is fragmentation,"
     );
+    console.log(
+      "  which is the accepted trade (§4.4): a missing link is recoverable, a"
+    );
+    console.log("  wrong link is a lie. But CHECK them — a veto on a genuinely");
+    console.log("  same-event merge means the constant is wrong.");
   }
+
   if (cluster.readQueryTruncated) {
     console.error(
-      "  *** READ QUERY HIT THE POSTGREST ROW CAP — results were truncated. " +
+      "\n  *** READ QUERY HIT THE POSTGREST ROW CAP — results were truncated. " +
         "Articles are NOT being clustered. Raise the limit or paginate. ***"
     );
   }

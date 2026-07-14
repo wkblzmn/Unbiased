@@ -4,6 +4,7 @@ import {
   clusterArticles,
   titleKeywords,
   bodyTokens,
+  emptyDiagnostics,
   RawArticle,
   Cluster,
   MergeVia,
@@ -15,30 +16,29 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// DERIVED from the algorithm's own windows, not guessed. The clusterer
-// admits a candidate within RECENCY_H=48h of the cluster's last member, and
-// only if the resulting span stays inside MAX_SPAN_H=72h.
+// DERIVED from the algorithm's own windows, not guessed. The clusterer admits a
+// candidate within RECENCY_H=48h of the cluster's last member, and only if the
+// resulting span stays inside MAX_SPAN_H=72h.
 const STALE_H = 72;
 const RECENCY_H = 48;
 const SEED_LOOKBACK_H = STALE_H + RECENCY_H; // 120
 
-// PostgREST caps a response at 1000 rows and TRUNCATES SILENTLY. For the
-// ready queue that means articles quietly never getting clustered.
+// PostgREST caps a response at 1000 rows and TRUNCATES SILENTLY.
 const MAX_READY_PER_RUN = 500;
 const MAX_SEED_CLUSTERS = 500;
 
-// Both statuses enter the clusterer. A 'linkonly' article has a real title,
-// a real URL, and a real outlet — only the body is missing. It is not a
-// failure, it is an article we could not read.
+// Both enter the clusterer. A 'linkonly' article has a real title, a real URL
+// and a real outlet — only the body is missing. It is not a failure, it is an
+// article we could not read.
 const CLUSTERABLE = ["ready", "linkonly"];
 
 function hoursAgo(d: Date): number {
   return (Date.now() - d.getTime()) / (1000 * 60 * 60);
 }
 
-// Does this article's text count as evidence for a summary?
-// A link-only placeholder does not. body_source NULL = a row that predates
-// migration 002; those all came from outlets whose pages we can fetch.
+// Does this article's text count as evidence for a summary? A link-only
+// placeholder does not. body_source NULL = a row predating migration 002;
+// those all came from outlets whose pages we can fetch.
 function hasRealBody(bodyText: string | null, bodySource: string | null): boolean {
   if (!bodyText || bodyText.trim().length === 0) return false;
   return (bodySource ?? "page") !== "none";
@@ -56,14 +56,12 @@ export async function runClusterer(): Promise<ClustererStats> {
     belowSourceBar: 0,
     belowSummaryBar: 0,
     readQueryTruncated: false,
+    vetoed: 0,
+    genericTerms: [],
+    corpusTitles: 0,
+    vetoLog: [],
   };
 
-  // ------------------------------------------------------------------
-  // 1. Seed state: clusters that could still accept a member.
-  //    first_article_at / last_article_at are READ FROM THE DB, not
-  //    recomputed from members — recomputing was the mechanism by which the
-  //    supposedly-frozen firstAt slid backward across runs.
-  // ------------------------------------------------------------------
   const cutoff = new Date(
     Date.now() - SEED_LOOKBACK_H * 60 * 60 * 1000
   ).toISOString();
@@ -94,9 +92,6 @@ export async function runClusterer(): Promise<ClustererStats> {
           sourceId: a.source_id as string,
           publishedAt: new Date(a.published_at),
           titleKw: titleKeywords(a.title),
-          // A link-only member contributes an EMPTY body set. It therefore
-          // cannot confirm anyone else backward — which is correct, since we
-          // never read its text.
           bodyKw: real ? bodyTokens(a.body_text) : new Set<string>(),
           hasBody: real,
           isNew: false,
@@ -118,9 +113,6 @@ export async function runClusterer(): Promise<ClustererStats> {
   }
   stats.seedClusters = seedClusters.length;
 
-  // ------------------------------------------------------------------
-  // 2. Work queue: 'ready' (has a body) AND 'linkonly' (has none).
-  // ------------------------------------------------------------------
   const { data: readyRows, error: readyError } = await supabase
     .from("articles")
     .select("id, source_id, title, published_at, body_text, body_source, status")
@@ -158,10 +150,7 @@ export async function runClusterer(): Promise<ClustererStats> {
 
   if (staleIds.length > 0) {
     stats.staleArticles = staleIds.length;
-    await supabase
-      .from("articles")
-      .update({ status: "stale" })
-      .in("id", staleIds);
+    await supabase.from("articles").update({ status: "stale" }).in("id", staleIds);
     console.log(
       `Marked ${staleIds.length} article(s) stale (older than ${STALE_H}h).`
     );
@@ -179,27 +168,25 @@ export async function runClusterer(): Promise<ClustererStats> {
   }
 
   const titleById = new Map(fresh.map((a) => [a.id, a.title]));
-  const resultClusters = clusterArticles(fresh, seedClusters);
 
-  // ------------------------------------------------------------------
-  // 3. Persist the delta.
-  //
-  //    TWO counts, and the difference between them is the whole point:
-  //
-  //      source_count         - outlets that COVERED the event, link-only
-  //                             included. Drives the detail screen. The
-  //                             honest answer to "who reported this?"
-  //
-  //      summary_source_count - outlets whose TEXT fed the summary. Drives
-  //                             the feed gate and the corroboration rule.
-  //                             The honest answer to "what is this summary
-  //                             actually based on?"
-  //
-  //    Conflating these is what deleted 62% of Dhaka Tribune.
-  // ------------------------------------------------------------------
+  // The veto is measured, not trusted. Everything it does this run comes back
+  // in `diag` and gets printed, so a bad constant shows up as a log line rather
+  // than as coverage that silently disappears.
+  const diag = emptyDiagnostics();
+  const resultClusters = clusterArticles(fresh, seedClusters, diag);
+
+  stats.vetoed = diag.vetoed;
+  stats.genericTerms = diag.genericTerms;
+  stats.corpusTitles = diag.corpusTitles;
+  stats.vetoLog = diag.vetoLog.map((v) => ({
+    articleTitle: v.articleTitle,
+    wouldHaveMergedVia: v.wouldHaveMergedVia,
+    sharedTerms: v.sharedTerms,
+  }));
+
   for (const cluster of resultClusters) {
     const newMembers = cluster.members.filter((m) => m.isNew);
-    if (newMembers.length === 0) continue; // untouched existing cluster
+    if (newMembers.length === 0) continue;
 
     let clusterId: string;
 
@@ -256,9 +243,8 @@ export async function runClusterer(): Promise<ClustererStats> {
       continue;
     }
 
-    // Both counts from the source of truth. PostgREST cannot do
-    // count(distinct ...), so pull the (small) id pairs and do it here.
-    // No bodies are transferred — only source_id and body_source.
+    // Both counts from the source of truth, not from memory. No bodies
+    // transferred — only source_id and body_source.
     const { data: linked, error: countError } = await supabase
       .from("cluster_articles")
       .select("article_id, articles(source_id, body_source, body_text)")
@@ -268,9 +254,9 @@ export async function runClusterer(): Promise<ClustererStats> {
       continue;
     }
 
-    const rows = (linked as any[]).map((l) =>
-      Array.isArray(l.articles) ? l.articles[0] : l.articles
-    ).filter(Boolean);
+    const rows = (linked as any[])
+      .map((l) => (Array.isArray(l.articles) ? l.articles[0] : l.articles))
+      .filter(Boolean);
 
     const articleCount = linked.length;
     const sourceCount = new Set(rows.map((r) => r.source_id)).size;
@@ -309,7 +295,8 @@ export async function runClusterer(): Promise<ClustererStats> {
       console.error("Failed to mark articles clustered:", statusError.message);
     }
 
-    const linkOnlyHere = rows.length - rows.filter((r) => hasRealBody(r.body_text, r.body_source)).length;
+    const linkOnlyHere =
+      rows.length - rows.filter((r) => hasRealBody(r.body_text, r.body_source)).length;
     console.log(
       `Cluster ${clusterId}: +${membersToLink.length} → ` +
         `${articleCount} article(s), ${sourceCount} outlet(s), ` +
