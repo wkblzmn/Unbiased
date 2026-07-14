@@ -57,8 +57,6 @@ export async function runClusterer(): Promise<ClustererStats> {
     belowSummaryBar: 0,
     readQueryTruncated: false,
     vetoed: 0,
-    genericTerms: [],
-    corpusTitles: 0,
     vetoLog: [],
   };
 
@@ -176,8 +174,6 @@ export async function runClusterer(): Promise<ClustererStats> {
   const resultClusters = clusterArticles(fresh, seedClusters, diag);
 
   stats.vetoed = diag.vetoed;
-  stats.genericTerms = diag.genericTerms;
-  stats.corpusTitles = diag.corpusTitles;
   stats.vetoLog = diag.vetoLog.map((v) => ({
     articleTitle: v.articleTitle,
     wouldHaveMergedVia: v.wouldHaveMergedVia,

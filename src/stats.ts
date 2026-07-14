@@ -59,21 +59,19 @@ export interface ClustererStats {
 
   // THE VETO, INSTRUMENTED.
   //
-  // GENERIC_DF_RATIO is a guess verified by hand against 8 merges from one run.
-  // That is a real check on a tiny sample, and the small-corpus problem that
-  // killed the IDF experiment (v3) has not gone away. So the veto reports
-  // everything it does and is judged on the evidence, not believed on the
-  // argument.
+  // GENERIC_TERMS is a hand-curated list, not a statistic. Two attempts to
+  // derive it from document frequency failed on this corpus for the same
+  // measured reason: at ~230 titles, DF cannot separate `death` (3.1%) from
+  // `iran` (3.1%), and ranks the place name `ctg` (4.4%) above both. See the
+  // header of clusterer.ts for the full DF table.
   //
-  // WHAT TO WATCH:
-  //   genericTerms - if an EVENT-IDENTIFYING word shows up in here (a place, a
-  //                  person, a specific noun), the ratio is too low and the veto
-  //                  will start rejecting good merges. Raise GENERIC_DF_RATIO.
-  //   vetoLog      - every merge blocked, with the terms that were shared. Read
-  //                  these. If they look like the same event, the veto is wrong.
+  // So the list is an editorial input, like the bias labels are, and it is
+  // audited the same way — by reading what it did.
+  //
+  // WHAT TO WATCH: every blocked merge is logged with the exact terms that were
+  // shared. If a blocked pair is genuinely the same event, a word is in
+  // GENERIC_TERMS that should not be.
   vetoed: number;
-  genericTerms: string[];
-  corpusTitles: number;
   vetoLog: VetoRecord[];
 }
 
@@ -143,22 +141,7 @@ export function printRunReport(
   console.log(`  merge_via                : ${JSON.stringify(cluster.mergeVia)}`);
 
   console.log("\nGeneric-term veto:");
-  console.log(`  corpus titles            : ${cluster.corpusTitles}`);
   console.log(`  merges blocked           : ${cluster.vetoed}`);
-  console.log(
-    `  generic terms (${cluster.genericTerms.length}) : ${
-      cluster.genericTerms.length > 0 ? cluster.genericTerms.join(", ") : "(none)"
-    }`
-  );
-  console.log(
-    "  ^ READ THIS LIST. These words can no longer justify a merge on their own."
-  );
-  console.log(
-    "    If an event-identifying word (a place, a person, a specific noun) is in"
-  );
-  console.log(
-    "    it, GENERIC_DF_RATIO is too low and good merges are being rejected."
-  );
 
   if (cluster.vetoLog.length > 0) {
     console.log("\n  Blocked merges:");

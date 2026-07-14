@@ -6,10 +6,7 @@
 //   v1 union-centroid Dice        - structural bug: growing denominator locked
 //                                   well-covered stories out of their own cluster
 //   v2 max-pairwise linkage       - fixed it
-//   v3 IDF weighting              - TESTED AND REJECTED. At ~45 documents, DF
-//                                   measures single-story coverage, not
-//                                   genericness. `case` and `filed` scored rarer
-//                                   than `savar`. Inverted.
+//   v3 IDF weighting              - TESTED AND REJECTED (see v9)
 //   v4 body coverage (one-way)    - missed reaction-piece-first stories
 //   v5 bidirectional, per-member  - fixed it
 //   v6 incremental                - seed from DB, persist only the delta
@@ -17,59 +14,74 @@
 //   v8 link-only articles         - a 403 no longer deletes an outlet's coverage
 //   v9 generic-term veto          - see below
 //
+// ---------------------------------------------------------------------------
 // v9 — THE GENERIC-TERM VETO
 //
-// Observed, in production, one false merge:
+// One false merge, observed in production:
 //
 //   cluster: "BGB deployed in 11 flood-hit districts"        (12 Jul)
 //   joined : "Flood death toll rises to 54; 6 lakh affected" (13 Jul, body_fwd)
 //
 // Different events. A troop deployment is not a casualty report. The body of
-// the death-toll article was READ (1,200 chars) and mentions BGB exactly zero
-// times. So how did it merge?
+// the death-toll article was READ in full; it mentions BGB exactly zero times.
+// So how did it merge?
 //
-//   BGB headline keywords: {bgb, deployed, flood, hit, districts}   (5 terms)
-//   Found in the death-toll body: flood ✓  districts ✓  hit ✓
+//   BGB title keywords: {bgb, deployed, flood, hit, districts}
+//   Found in the death-toll body: flood ✓  districts ✓  hit ✓  (via "worst-hit")
 //                                 deployed ✗  bgb ✗
 //   coverage = 3/5 = 0.60 = exactly BODY_COVERAGE_THRESHOLD. Merged.
 //
-// It cleared the bar on `flood`, `districts` and `hit` — three of the most
-// common words in the Bangladeshi monsoon news cycle — while missing BOTH
-// terms that actually identify the event. coverage() is a bare fraction with
-// no notion of which terms carry information. A short headline built from
-// common words is trivially "covered" by any article on the same broad topic.
+// It cleared the bar on three of the most common words in the Bangladeshi
+// monsoon news cycle while missing BOTH terms that identify the event.
+// coverage() is a bare fraction with no notion of which terms carry
+// information. A short headline built from common words is trivially "covered"
+// by any article on the same broad topic.
 //
-// THE VETO: on the WEAK paths only, at least one of the terms doing the
-// merging must be non-generic. A term is generic if it appears in more than
-// GENERIC_DF_RATIO of the titles in this run's corpus.
+// THE RULE: on the WEAK paths only, at least one of the terms doing the merging
+// must be non-generic.
 //
-// WHY THIS IS NOT v3 REPEATING ITSELF. Three differences, and they matter:
+// ---------------------------------------------------------------------------
+// WHY THE LIST IS CURATED AND NOT DERIVED FROM DOCUMENT FREQUENCY
 //
-//   1. It is a BINARY VETO, not a weight. v3 multiplied Dice by IDF and let a
-//      distorted score decide the merge. This does not touch the score at all.
-//      It asks one question after the fact: "was ANY of the evidence specific?"
+// The obvious implementation is IDF: call a term generic if it appears in more
+// than X% of the corpus. That was tried. TWICE. It fails, and the measured
+// reason is the same both times.
 //
-//   2. It applies ONLY to the weak paths (body_fwd, body_bwd, title_nobody) —
-//      the ones where the title signal was too weak to merge on its own and
-//      something else had to rescue it. The strong path (title Dice >= 0.4 with
-//      a real body) is untouched. v3 poisoned every merge; this touches only the
-//      merges that were already operating on thin evidence.
+// v3 tried DF as a WEIGHT on the Dice score and it inverted: at ~45 documents,
+// boilerplate like `case` and `filed` scored RARER than event-identifying terms
+// like `savar`, because DF at that scale measures how many outlets covered ONE
+// story, not how generic a word is across topics.
 //
-//   3. It only ever REJECTS. v3's failure mode was promoting boilerplate terms
-//      like `case` and `filed` above event terms like `savar`, which changed
-//      which cluster won. This cannot promote anything. Worst case it rejects a
-//      good merge, which produces fragmentation — the failure mode this project
-//      has already accepted and documented (proposal §4.4).
+// v9 first tried DF as a RATIO-BASED VETO, on the theory that scoping it
+// narrowly rescued it. It did not. Here is the actual document frequency of the
+// live 226-title corpus:
 //
-// HONESTY ABOUT THE CONSTANTS: GENERIC_DF_RATIO is a guess. It was verified by
-// hand against exactly 8 merges from one run — it blocks the BGB drift and
-// preserves all 7 correct link-only merges. That is a real check but a tiny
-// sample, and the small-corpus problem that killed v3 has not gone away.
+//     for           25   11.1%       ctg            10    4.4%
+//     bangladesh    22    9.7%       heavy          10    4.4%
+//     govt          21    9.3%       death           7    3.1%
+//     minister      20    8.8%       iran            7    3.1%
+//     flood         16    7.1%       waterlogging    5    2.2%
+//     rain          15    6.6%       hsc             5    2.2%
+//     dhaka         15    6.6%       trump           5    2.2%
+//     parliament    12    5.3%
 //
-// So the veto is INSTRUMENTED, not trusted. Every run prints the generic term
-// list it computed and every merge it blocked, with the terms involved. If it
-// starts rejecting good merges, the log will show it and the constant moves.
-// Do not raise this to a claim the data does not support.
+// Read `death` (3.1%) against `iran` (3.1%). Identical frequency. One is pure
+// boilerplate; the other is the single most event-identifying word in its
+// headline. And `ctg` — Chittagong, a PLACE NAME — outranks both at 4.4%.
+//
+// There is no threshold that separates these. Any cut low enough to catch
+// `death` also catches `iran` and `ctg`, and vetoing on a place name rejects
+// good merges. `iran` is at 3.1% not because Iran is generic but because there
+// were 7 Iran stories this week; next week it is zero. DF at this corpus size
+// measures THIS WEEK'S NEWS CYCLE, not the language.
+//
+// So: a curated list. Small, static, stable across news cycles, and defensible.
+// It is an editorial input, exactly like the per-source bias labels are — and
+// it should be declared as one in the report rather than dressed up as
+// statistics it cannot support. Claiming "IDF-weighted clustering" for a
+// mechanism that demonstrably inverts on this corpus would be the same kind of
+// unearned authority this product exists to push back on.
+// ---------------------------------------------------------------------------
 
 const STOPWORDS = new Set([
   "a", "an", "the", "in", "on", "at", "of", "for", "to", "and", "or",
@@ -85,6 +97,41 @@ const SYNONYMS: Record<string, string> = {
   explosions: "blast",
   blasts: "blast",
 };
+
+// ---------------------------------------------------------------------------
+// GENERIC TERMS — high-frequency, low-information words in the Bangladeshi
+// news corpus. These can still CONTRIBUTE to a Dice or coverage score. What
+// they cannot do is be the ONLY evidence behind a weak-path merge.
+//
+// Curated by hand, from the observed DF table above plus the obvious
+// institutional vocabulary. Deliberately does NOT contain:
+//   - place names (dhaka is here as a modifier, but not chittagong/sylhet/ctg)
+//   - person names
+//   - numbers
+//   - any term that identifies WHICH event, only terms that identify WHICH TOPIC
+//
+// If a merge's only shared evidence is drawn entirely from this set, the two
+// articles are about the same TOPIC, not demonstrably the same EVENT.
+// ---------------------------------------------------------------------------
+const GENERIC_TERMS = new Set([
+  // Nation / geography as topic markers
+  "bangladesh", "bangladeshi", "dhaka", "country", "national", "nationwide",
+
+  // Government and recurring institutions
+  "govt", "government", "minister", "ministry", "parliament", "police",
+  "court", "committee", "authorities", "official", "officials", "adviser",
+
+  // The dominant weather / disaster vocabulary. This is the cluster of words
+  // that produced the BGB false merge.
+  "flood", "floods", "flooded", "flooding", "rain", "rains", "rainfall",
+  "monsoon", "heavy", "water", "weather", "district", "districts",
+  "affected", "hit", "situation", "danger", "level", "relief",
+
+  // Generic event nouns and reporting verbs that survive the stopword filter
+  "death", "deaths", "dead", "toll", "people", "report", "reports",
+  "case", "cases", "new", "day", "days", "year", "years",
+  "may", "will", "continue", "continues", "amid",
+]);
 
 function truncateWords(text: string, maxWords: number): string {
   return text.split(/\s+/).slice(0, maxWords).join(" ");
@@ -117,60 +164,30 @@ export function dice(a: Set<string>, b: Set<string>): number {
   return (2 * shared) / (a.size + b.size);
 }
 
-// Which terms are shared / covered — not just how many. The veto needs the
-// terms themselves, and so does the log line that lets you audit it.
+// Which terms are shared — not just how many. The veto needs the terms
+// themselves, and so does the log line that lets you audit it.
 function intersect(a: Set<string>, b: Set<string>): string[] {
   const out: string[] = [];
   for (const t of a) if (b.has(t)) out.push(t);
   return out;
 }
 
-// What fraction of `target` appears in `source`.
-function coverageOf(source: Set<string>, target: Set<string>): {
-  score: number;
-  terms: string[];
-} {
+function coverageOf(
+  source: Set<string>,
+  target: Set<string>
+): { score: number; terms: string[] } {
   if (target.size === 0) return { score: 0, terms: [] };
   const terms = intersect(target, source);
   return { score: terms.length / target.size, terms };
 }
 
-// ---------------------------------------------------------------------
-// THE GENERIC TERM SET
-//
-// Document frequency over TITLES ONLY (bodies would drown everything in
-// boilerplate), computed fresh every run over the whole corpus in scope:
-// the new articles plus every member of every open cluster.
-//
-// GENERIC_MIN_DF exists because of the v3 lesson. At small n, a term appearing
-// in 2 of 20 titles is 10% — but 2 occurrences is noise, not evidence of
-// genericness. Requiring an absolute floor as well as a ratio stops the veto
-// from inventing "generic" terms out of a handful of documents. This is the
-// guard v3 did not have.
-// ---------------------------------------------------------------------
-const GENERIC_DF_RATIO = 0.1; // >10% of titles in the corpus
-const GENERIC_MIN_DF = 3; // ...and at least 3 titles, absolutely
-
-export function buildGenericTerms(titleSets: Set<string>[]): Set<string> {
-  const generic = new Set<string>();
-  const n = titleSets.length;
-  if (n === 0) return generic;
-
-  const df = new Map<string, number>();
-  for (const s of titleSets) {
-    for (const t of s) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-
-  for (const [term, count] of df) {
-    if (count >= GENERIC_MIN_DF && count / n > GENERIC_DF_RATIO) {
-      generic.add(term);
-    }
-  }
-  return generic;
+export function isGeneric(term: string): boolean {
+  return GENERIC_TERMS.has(term);
 }
 
-function hasSpecificTerm(terms: string[], generic: Set<string>): boolean {
-  return terms.some((t) => !generic.has(t));
+// The whole veto, in one line: was ANY of the evidence event-identifying?
+function hasSpecificTerm(terms: string[]): boolean {
+  return terms.some((t) => !GENERIC_TERMS.has(t));
 }
 
 export interface RawArticle {
@@ -207,17 +224,18 @@ export interface Cluster {
   mergeVia: Map<string, MergeVia>;
 }
 
-// Everything the veto did this run, so it can be audited instead of believed.
+// Everything the veto did this run, so it can be audited rather than believed.
 export interface ClusterDiagnostics {
-  genericTerms: string[];
-  corpusTitles: number;
   vetoed: number;
   vetoLog: Array<{
     articleTitle: string;
     wouldHaveMergedVia: MergeVia;
     sharedTerms: string[];
-    allGeneric: true;
   }>;
+}
+
+export function emptyDiagnostics(): ClusterDiagnostics {
+  return { vetoed: 0, vetoLog: [] };
 }
 
 const TITLE_MERGE = 0.4;
@@ -255,21 +273,6 @@ export function clusterArticles(
 
   const clusters: Cluster[] = [...existingClusters];
 
-  // The corpus for DF: every title in play this run. New articles AND every
-  // member of every open cluster — because the merge decision is between a new
-  // article and an existing member, so both populations define what "common"
-  // means right now.
-  const corpus: Set<string>[] = [
-    ...sorted.map((a) => titleKeywords(a.title)),
-    ...clusters.flatMap((c) => c.members.map((m) => m.titleKw)),
-  ];
-  const generic = buildGenericTerms(corpus);
-
-  if (diag) {
-    diag.genericTerms = [...generic].sort();
-    diag.corpusTitles = corpus.length;
-  }
-
   for (const article of sorted) {
     const kw = titleKeywords(article.title);
     const body = article.hasBody
@@ -289,9 +292,8 @@ export function clusterArticles(
     let bestTier = 0; // 0 = none, 1 = body-confirmed, 2 = title-strong
     let bestTitleScore = 0;
     let bestVia: MergeVia = "title";
-    let bestEvidence: string[] = [];
 
-    // Track the strongest merge the VETO rejected, purely so it can be logged.
+    // Track the merge the veto rejected, purely so it can be logged.
     let vetoedVia: MergeVia | null = null;
     let vetoedTerms: string[] = [];
 
@@ -308,21 +310,19 @@ export function clusterArticles(
 
       let tier = 0;
       let via: MergeVia = article.hasBody ? "title" : "title_nobody";
-      let evidence: string[] = [];
 
       if (titleScore >= titleBar) {
         tier = 2;
         via = article.hasBody ? "title" : "title_nobody";
-        evidence = titleTerms;
 
         // The STRONG path (real body, Dice >= 0.4) is NOT vetoed. A 0.4+ title
-        // match is substantial evidence on its own and the veto has no business
-        // second-guessing it. Only title_nobody — which has no body behind it —
-        // is checked here.
-        if (via === "title_nobody" && !hasSpecificTerm(evidence, generic)) {
-          if (tier > bestTier || vetoedVia === null) {
+        // match against a member is substantial evidence in its own right and
+        // the veto has no business second-guessing it. Only title_nobody —
+        // which has no body behind it at all — is checked here.
+        if (via === "title_nobody" && !hasSpecificTerm(titleTerms)) {
+          if (vetoedVia === null) {
             vetoedVia = via;
-            vetoedTerms = evidence;
+            vetoedTerms = titleTerms;
           }
           tier = 0;
         }
@@ -363,14 +363,14 @@ export function clusterArticles(
         if (bestCoverage >= BODY_COVERAGE_THRESHOLD) {
           tier = 1;
           via = useForward ? "body_fwd" : "body_bwd";
-          evidence = useForward ? forwardTerms : backwardTerms;
+          const evidence = useForward ? forwardTerms : backwardTerms;
 
-          // THE VETO. This is the line that would have blocked the BGB drift:
-          // covered terms were {flood, districts, hit}, all three generic,
-          // while `bgb` and `deployed` — the terms that identify the event —
-          // were absent from the body entirely.
-          if (!hasSpecificTerm(evidence, generic)) {
-            if (tier > bestTier || vetoedVia === null) {
+          // THE VETO. This is the line that blocks the BGB drift: covered terms
+          // were {flood, hit, districts} — all three generic — while `bgb` and
+          // `deployed`, the terms that identify the event, were absent from the
+          // body entirely.
+          if (!hasSpecificTerm(evidence)) {
+            if (vetoedVia === null) {
               vetoedVia = via;
               vetoedTerms = evidence;
             }
@@ -387,20 +387,17 @@ export function clusterArticles(
         bestTier = tier;
         bestTitleScore = titleScore;
         bestVia = via;
-        bestEvidence = evidence;
       }
     }
 
-    // Log the veto ONLY if it actually changed the outcome — i.e. nothing else
-    // took the article. A veto on one candidate while the article merged
-    // correctly into another is the system working, not a rejection.
+    // Log the veto ONLY if it changed the outcome. A veto on one candidate
+    // while the article merged correctly into another is the system working.
     if (bestTier === 0 && vetoedVia && diag) {
       diag.vetoed++;
       diag.vetoLog.push({
         articleTitle: article.title,
         wouldHaveMergedVia: vetoedVia,
         sharedTerms: vetoedTerms,
-        allGeneric: true,
       });
     }
 
@@ -415,7 +412,6 @@ export function clusterArticles(
     };
 
     if (best && bestTier > 0) {
-      void bestEvidence; // kept for future audit logging
       best.members.push(newMember);
 
       if (article.publishedAt.getTime() > best.lastAt.getTime()) {
@@ -427,9 +423,9 @@ export function clusterArticles(
 
       best.mergeVia.set(article.id, bestVia);
     } else {
-      // A vetoed article founds its own cluster. That is fragmentation, and
-      // fragmentation is the failure mode this project accepted up front
-      // (§4.4). A missing link is recoverable; a wrong link is a lie.
+      // A vetoed article founds its own cluster. That is fragmentation, which
+      // is the failure mode this project accepted up front (§4.4): a missing
+      // link is recoverable, a wrong link is a lie.
       clusters.push({
         members: [newMember],
         firstAt: article.publishedAt,
@@ -440,10 +436,6 @@ export function clusterArticles(
   }
 
   return clusters;
-}
-
-export function emptyDiagnostics(): ClusterDiagnostics {
-  return { genericTerms: [], corpusTitles: 0, vetoed: 0, vetoLog: [] };
 }
 
 // Outlets that COVERED the event. Drives the story detail screen.
