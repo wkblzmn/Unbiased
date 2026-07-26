@@ -26,6 +26,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 25 # must stay under the 30-min cron interval
+    defaults:
+      run:
+        working-directory: unbiased-backend
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +37,7 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+          cache-dependency-path: unbiased-backend/package-lock.json
 
       - run: npm ci
 
