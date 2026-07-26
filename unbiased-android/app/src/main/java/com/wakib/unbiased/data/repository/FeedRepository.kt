@@ -22,6 +22,9 @@ class FeedRepository @Inject constructor(
 ) {
     fun observeFeed(): Flow<List<StoryClusterEntity>> = storyClusterDao.observeAll()
 
+    fun observeFeedByCategory(category: String): Flow<List<StoryClusterEntity>> =
+        storyClusterDao.observeByCategory(category)
+
     fun observeSources(clusterId: String): Flow<List<SourceEntity>> =
         sourceDao.observeForCluster(clusterId)
 
