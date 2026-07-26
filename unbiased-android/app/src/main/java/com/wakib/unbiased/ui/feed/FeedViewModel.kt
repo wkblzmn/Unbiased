@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -33,14 +34,23 @@ class FeedViewModel @Inject constructor(
     private val error = MutableStateFlow<String?>(null)
     private val selectedCategory = MutableStateFlow<String?>(null)
 
-    private val stories = selectedCategory.flatMapLatest { category ->
-        if (category == null) repository.observeFeed() else repository.observeFeedByCategory(category)
+    // category and its matching story list must reach combine() as a single
+    // atomic emission — combining selectedCategory both here and directly
+    // below let a state slip through where the new category label paired
+    // with the still-old (pre-switch) story list, because flatMapLatest's
+    // switch to the new inner flow doesn't land in the same tick as
+    // selectedCategory's own emission to the parallel combine argument.
+    private data class CategoryStories(val category: String?, val stories: List<StoryClusterEntity>)
+
+    private val categoryStories = selectedCategory.flatMapLatest { category ->
+        val storyFlow = if (category == null) repository.observeFeed() else repository.observeFeedByCategory(category)
+        storyFlow.map { CategoryStories(category, it) }
     }
 
     val uiState: StateFlow<FeedUiState> = combine(
-        stories, isLoading, error, selectedCategory
-    ) { storyList, loading, err, category ->
-        FeedUiState(stories = storyList, isLoading = loading, error = err, selectedCategory = category)
+        categoryStories, isLoading, error
+    ) { cs, loading, err ->
+        FeedUiState(stories = cs.stories, isLoading = loading, error = err, selectedCategory = cs.category)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
