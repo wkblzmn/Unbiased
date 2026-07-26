@@ -34,7 +34,17 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideSupabaseApi(client: OkHttpClient): SupabaseApi {
-        val baseUrl = BuildConfig.SUPABASE_URL.let { if (it.endsWith("/")) it else "$it/" }
+        // An empty/misconfigured SUPABASE_URL must not crash the app at
+        // startup (Retrofit validates the base URL eagerly, before any
+        // network call). Falling back to a syntactically valid placeholder
+        // turns that into an ordinary failed-request error, which the
+        // existing loading/error/empty UI states already handle.
+        val configuredUrl = BuildConfig.SUPABASE_URL
+        val baseUrl = if (configuredUrl.startsWith("http://") || configuredUrl.startsWith("https://")) {
+            if (configuredUrl.endsWith("/")) configuredUrl else "$configuredUrl/"
+        } else {
+            "https://unconfigured.local/"
+        }
         return Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(client)
