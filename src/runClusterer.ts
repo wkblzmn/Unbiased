@@ -23,9 +23,16 @@ const STALE_H = 72;
 const RECENCY_H = 48;
 const SEED_LOOKBACK_H = STALE_H + RECENCY_H; // 120
 
-// PostgREST caps a response at 1000 rows and TRUNCATES SILENTLY.
+// PostgREST caps a single response at 1000 rows. The active-cluster set MUST be
+// complete: a truncated set means new articles get matched against an arbitrary
+// subset of eligible clusters, silently founding duplicates instead of joining
+// the real match. So it is paginated in full below — never capped with .limit().
+const PAGE_SIZE = 1000;
+
+// Articles-to-process is a different risk: anything past this cap just stays
+// status:'ready' and gets picked up next run. A miss here is a delay, not a
+// wrong match, so a fixed cap is safe.
 const MAX_READY_PER_RUN = 500;
-const MAX_SEED_CLUSTERS = 500;
 
 // Both enter the clusterer. A 'linkonly' article has a real title, a real URL
 // and a real outlet — only the body is missing. It is not a failure, it is an
@@ -42,6 +49,25 @@ function hoursAgo(d: Date): number {
 function hasRealBody(bodyText: string | null, bodySource: string | null): boolean {
   if (!bodyText || bodyText.trim().length === 0) return false;
   return (bodySource ?? "page") !== "none";
+}
+
+// Drains a PostgREST query across as many pages as it takes. Used for the
+// active-cluster fetch, where a truncated result silently corrupts matching —
+// unlike readyRows, this one is never allowed to just stop at a cap.
+async function fetchAllRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
+): Promise<T[]> {
+  const all: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await page(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
 }
 
 export async function runClusterer(): Promise<ClustererStats> {
@@ -64,19 +90,17 @@ export async function runClusterer(): Promise<ClustererStats> {
     Date.now() - SEED_LOOKBACK_H * 60 * 60 * 1000
   ).toISOString();
 
-  const { data: activeClusterRows, error: loadError } = await supabase
-    .from("story_clusters")
-    .select(
-      "id, first_article_at, last_article_at, " +
-        "cluster_articles(article_id, articles(id, source_id, title, body_text, body_source, published_at))"
-    )
-    .gte("last_article_at", cutoff)
-    .limit(MAX_SEED_CLUSTERS);
-  if (loadError) throw loadError;
-
-  if (activeClusterRows.length === MAX_SEED_CLUSTERS) {
-    stats.readQueryTruncated = true;
-  }
+  const activeClusterRows = await fetchAllRows<any>((from, to) =>
+    supabase
+      .from("story_clusters")
+      .select(
+        "id, first_article_at, last_article_at, " +
+          "cluster_articles(article_id, articles(id, source_id, title, body_text, body_source, published_at))"
+      )
+      .gte("last_article_at", cutoff)
+      .order("last_article_at", { ascending: false })
+      .range(from, to)
+  );
 
   const seedClusters: Cluster[] = [];
   for (const row of activeClusterRows as any[]) {
