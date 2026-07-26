@@ -28,6 +28,9 @@ class FeedRepository @Inject constructor(
     fun observeSources(clusterId: String): Flow<List<SourceEntity>> =
         sourceDao.observeForCluster(clusterId)
 
+    suspend fun getCachedStory(clusterId: String): StoryClusterEntity? =
+        storyClusterDao.getById(clusterId)
+
     suspend fun refreshFeed() {
         val clusters = api.getFeedClusters()
         storyClusterDao.upsertAll(clusters.map { it.toEntity() })

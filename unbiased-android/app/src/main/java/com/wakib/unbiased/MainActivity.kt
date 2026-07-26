@@ -7,9 +7,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.wakib.unbiased.ui.detail.DetailScreen
+import com.wakib.unbiased.ui.detail.DetailViewModel
 import com.wakib.unbiased.ui.feed.FeedScreen
 import com.wakib.unbiased.ui.feed.FeedViewModel
 import com.wakib.unbiased.ui.theme.UnbiasedTheme
@@ -36,11 +40,16 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    composable("detail/{clusterId}") {
-                        // Story Detail screen lands next — full summary, every
-                        // source with outlet name + bias label + link, and the
-                        // link-only marker for outlets whose text never fed
-                        // the summary (feed_cluster_sources.has_body).
+                    composable(
+                        route = "detail/{clusterId}",
+                        arguments = listOf(navArgument("clusterId") { type = NavType.StringType })
+                    ) {
+                        val viewModel: DetailViewModel = hiltViewModel()
+                        val uiState by viewModel.uiState.collectAsState()
+                        DetailScreen(
+                            uiState = uiState,
+                            onBack = { navController.popBackStack() }
+                        )
                     }
                 }
             }
