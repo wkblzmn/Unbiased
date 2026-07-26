@@ -52,6 +52,19 @@ class FeedRepository @Inject constructor(
         storyClusterDao.upsertAll(clusters.map { it.toEntity() })
     }
 
+    // Fetches the next page older than [before] (a story's lastArticleAt),
+    // optionally scoped to [category]. Room's upsert is additive, so paging
+    // just grows the local cache; the UI keeps observing it as one list.
+    // Returns true if a full page came back, i.e. there may be more to load.
+    suspend fun loadMore(category: String?, before: String): Boolean {
+        val clusters = api.getFeedClusters(
+            categoryFilter = category?.let { "eq.$it" },
+            beforeFilter = "lt.$before"
+        )
+        storyClusterDao.upsertAll(clusters.map { it.toEntity() })
+        return clusters.size >= SupabaseApi.FEED_PAGE_SIZE
+    }
+
     suspend fun refreshSources(clusterId: String) {
         val sources = api.getSourcesForCluster(clusterIdFilter = "eq.$clusterId")
         sourceDao.clearForCluster(clusterId)

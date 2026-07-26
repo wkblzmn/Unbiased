@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Refresh
@@ -27,6 +28,10 @@ import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +49,7 @@ fun FeedScreen(
     onRefresh: () -> Unit,
     onStoryClick: (String) -> Unit,
     onOpenBookmarks: () -> Unit,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -67,7 +73,7 @@ fun FeedScreen(
                 selectedCategory = uiState.selectedCategory,
                 onSelectCategory = onSelectCategory
             )
-            FeedContent(uiState = uiState, onStoryClick = onStoryClick)
+            FeedContent(uiState = uiState, onStoryClick = onStoryClick, onLoadMore = onLoadMore)
         }
     }
 }
@@ -102,6 +108,7 @@ private fun CategoryFilterRow(
 private fun FeedContent(
     uiState: FeedUiState,
     onStoryClick: (String) -> Unit,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when {
@@ -127,9 +134,38 @@ private fun FeedContent(
             }
         }
         else -> {
-            LazyColumn(modifier = modifier.fillMaxSize()) {
+            val listState = rememberLazyListState()
+
+            val shouldLoadMore by remember {
+                derivedStateOf {
+                    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+                    lastVisible >= listState.layoutInfo.totalItemsCount - 3
+                }
+            }
+            LaunchedEffect(shouldLoadMore) {
+                if (shouldLoadMore) onLoadMore()
+            }
+
+            LazyColumn(modifier = modifier.fillMaxSize(), state = listState) {
                 items(uiState.stories, key = { it.id }) { story ->
                     StoryCard(story = story, onClick = { onStoryClick(story.id) })
+                }
+                if (uiState.isLoadingMore) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+                if (uiState.endReached && uiState.stories.isNotEmpty()) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "That's everything.",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
                 }
             }
         }

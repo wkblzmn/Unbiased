@@ -40,7 +40,8 @@ class MainActivity : ComponentActivity() {
                             onStoryClick = { clusterId ->
                                 navController.navigate("detail/$clusterId")
                             },
-                            onOpenBookmarks = { navController.navigate("bookmarks") }
+                            onOpenBookmarks = { navController.navigate("bookmarks") },
+                            onLoadMore = viewModel::loadMore
                         )
                     }
                     composable(
