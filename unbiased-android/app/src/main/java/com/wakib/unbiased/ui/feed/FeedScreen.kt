@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +43,7 @@ fun FeedScreen(
     onSelectCategory: (String?) -> Unit,
     onRefresh: () -> Unit,
     onStoryClick: (String) -> Unit,
+    onOpenBookmarks: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -50,6 +52,9 @@ fun FeedScreen(
             TopAppBar(
                 title = { Text("Unbiased") },
                 actions = {
+                    IconButton(onClick = onOpenBookmarks) {
+                        Icon(Icons.Filled.Bookmarks, contentDescription = "Bookmarks")
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }

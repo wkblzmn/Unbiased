@@ -2,17 +2,20 @@ package com.wakib.unbiased.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.wakib.unbiased.data.local.dao.BookmarkDao
 import com.wakib.unbiased.data.local.dao.SourceDao
 import com.wakib.unbiased.data.local.dao.StoryClusterDao
+import com.wakib.unbiased.data.local.entity.BookmarkEntity
 import com.wakib.unbiased.data.local.entity.SourceEntity
 import com.wakib.unbiased.data.local.entity.StoryClusterEntity
 
 @Database(
-    entities = [StoryClusterEntity::class, SourceEntity::class],
-    version = 1,
+    entities = [StoryClusterEntity::class, SourceEntity::class, BookmarkEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun storyClusterDao(): StoryClusterDao
     abstract fun sourceDao(): SourceDao
+    abstract fun bookmarkDao(): BookmarkDao
 }

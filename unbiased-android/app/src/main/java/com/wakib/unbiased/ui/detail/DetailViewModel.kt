@@ -20,7 +20,8 @@ data class StoryDetailUiState(
     val story: StoryClusterEntity? = null,
     val sources: List<SourceEntity> = emptyList(),
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isBookmarked: Boolean = false
 )
 
 @HiltViewModel
@@ -39,9 +40,16 @@ class DetailViewModel @Inject constructor(
         story,
         repository.observeSources(clusterId),
         isLoading,
-        error
-    ) { storyValue, sources, loading, err ->
-        StoryDetailUiState(story = storyValue, sources = sources, isLoading = loading, error = err)
+        error,
+        repository.observeIsBookmarked(clusterId)
+    ) { storyValue, sources, loading, err, bookmarked ->
+        StoryDetailUiState(
+            story = storyValue,
+            sources = sources,
+            isLoading = loading,
+            error = err,
+            isBookmarked = bookmarked
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -53,6 +61,12 @@ class DetailViewModel @Inject constructor(
             story.value = repository.getCachedStory(clusterId)
         }
         refreshSources()
+    }
+
+    fun toggleBookmark() {
+        viewModelScope.launch {
+            repository.setBookmarked(clusterId, !uiState.value.isBookmarked)
+        }
     }
 
     fun refreshSources() {

@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,6 +44,7 @@ import com.wakib.unbiased.data.local.entity.SourceEntity
 fun DetailScreen(
     uiState: StoryDetailUiState,
     onBack: () -> Unit,
+    onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -52,6 +55,16 @@ fun DetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (uiState.story != null) {
+                        IconButton(onClick = onToggleBookmark) {
+                            Icon(
+                                imageVector = if (uiState.isBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                                contentDescription = if (uiState.isBookmarked) "Remove bookmark" else "Add bookmark"
+                            )
+                        }
                     }
                 }
             )

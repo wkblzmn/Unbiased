@@ -3,6 +3,7 @@ package com.wakib.unbiased.di
 import android.content.Context
 import androidx.room.Room
 import com.wakib.unbiased.data.local.AppDatabase
+import com.wakib.unbiased.data.local.dao.BookmarkDao
 import com.wakib.unbiased.data.local.dao.SourceDao
 import com.wakib.unbiased.data.local.dao.StoryClusterDao
 import dagger.Module
@@ -19,7 +20,12 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
-        return Room.databaseBuilder(context, AppDatabase::class.java, "unbiased.db").build()
+        // Pre-1.0, no installed base to migrate. Everything here is a
+        // reconstructible cache (refetched from the API) except bookmarks,
+        // which are low-stakes enough not to warrant real migrations yet.
+        return Room.databaseBuilder(context, AppDatabase::class.java, "unbiased.db")
+            .fallbackToDestructiveMigration(true)
+            .build()
     }
 
     @Provides
@@ -27,4 +33,7 @@ object DatabaseModule {
 
     @Provides
     fun provideSourceDao(db: AppDatabase): SourceDao = db.sourceDao()
+
+    @Provides
+    fun provideBookmarkDao(db: AppDatabase): BookmarkDao = db.bookmarkDao()
 }

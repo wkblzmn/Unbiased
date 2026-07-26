@@ -12,6 +12,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.wakib.unbiased.ui.bookmarks.BookmarksScreen
+import com.wakib.unbiased.ui.bookmarks.BookmarksViewModel
 import com.wakib.unbiased.ui.detail.DetailScreen
 import com.wakib.unbiased.ui.detail.DetailViewModel
 import com.wakib.unbiased.ui.feed.FeedScreen
@@ -37,7 +39,8 @@ class MainActivity : ComponentActivity() {
                             onRefresh = viewModel::refresh,
                             onStoryClick = { clusterId ->
                                 navController.navigate("detail/$clusterId")
-                            }
+                            },
+                            onOpenBookmarks = { navController.navigate("bookmarks") }
                         )
                     }
                     composable(
@@ -48,7 +51,19 @@ class MainActivity : ComponentActivity() {
                         val uiState by viewModel.uiState.collectAsState()
                         DetailScreen(
                             uiState = uiState,
-                            onBack = { navController.popBackStack() }
+                            onBack = { navController.popBackStack() },
+                            onToggleBookmark = viewModel::toggleBookmark
+                        )
+                    }
+                    composable("bookmarks") {
+                        val viewModel: BookmarksViewModel = hiltViewModel()
+                        val bookmarks by viewModel.bookmarks.collectAsState()
+                        BookmarksScreen(
+                            bookmarks = bookmarks,
+                            onBack = { navController.popBackStack() },
+                            onStoryClick = { clusterId ->
+                                navController.navigate("detail/$clusterId")
+                            }
                         )
                     }
                 }

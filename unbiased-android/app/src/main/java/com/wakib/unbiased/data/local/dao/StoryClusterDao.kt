@@ -15,6 +15,15 @@ interface StoryClusterDao {
     @Query("SELECT * FROM story_clusters WHERE category = :category ORDER BY lastArticleAt DESC")
     fun observeByCategory(category: String): Flow<List<StoryClusterEntity>>
 
+    @Query(
+        """
+        SELECT sc.* FROM story_clusters sc
+        INNER JOIN bookmarks b ON b.clusterId = sc.id
+        ORDER BY b.bookmarkedAt DESC
+        """
+    )
+    fun observeBookmarked(): Flow<List<StoryClusterEntity>>
+
     @Query("SELECT * FROM story_clusters WHERE id = :id")
     suspend fun getById(id: String): StoryClusterEntity?
 

@@ -1,7 +1,9 @@
 package com.wakib.unbiased.data.repository
 
+import com.wakib.unbiased.data.local.dao.BookmarkDao
 import com.wakib.unbiased.data.local.dao.SourceDao
 import com.wakib.unbiased.data.local.dao.StoryClusterDao
+import com.wakib.unbiased.data.local.entity.BookmarkEntity
 import com.wakib.unbiased.data.local.entity.SourceEntity
 import com.wakib.unbiased.data.local.entity.StoryClusterEntity
 import com.wakib.unbiased.data.remote.SupabaseApi
@@ -18,7 +20,8 @@ import javax.inject.Singleton
 class FeedRepository @Inject constructor(
     private val api: SupabaseApi,
     private val storyClusterDao: StoryClusterDao,
-    private val sourceDao: SourceDao
+    private val sourceDao: SourceDao,
+    private val bookmarkDao: BookmarkDao
 ) {
     fun observeFeed(): Flow<List<StoryClusterEntity>> = storyClusterDao.observeAll()
 
@@ -30,6 +33,19 @@ class FeedRepository @Inject constructor(
 
     suspend fun getCachedStory(clusterId: String): StoryClusterEntity? =
         storyClusterDao.getById(clusterId)
+
+    fun observeBookmarked(): Flow<List<StoryClusterEntity>> = storyClusterDao.observeBookmarked()
+
+    fun observeIsBookmarked(clusterId: String): Flow<Boolean> =
+        bookmarkDao.observeIsBookmarked(clusterId)
+
+    suspend fun setBookmarked(clusterId: String, bookmarked: Boolean) {
+        if (bookmarked) {
+            bookmarkDao.insert(BookmarkEntity(clusterId, System.currentTimeMillis()))
+        } else {
+            bookmarkDao.delete(clusterId)
+        }
+    }
 
     suspend fun refreshFeed() {
         val clusters = api.getFeedClusters()
